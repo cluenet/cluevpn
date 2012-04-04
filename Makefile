@@ -1,3 +1,4 @@
+.PHONY: all clean install uninstall debinstall
 CFLAGS = -g -O2
 
 all: signfile csv2bnl bnlutil cluevpn
