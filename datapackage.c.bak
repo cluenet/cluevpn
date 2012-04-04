@@ -1,0 +1,202 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <arpa/inet.h>
+#include <openssl/sha.h>
+#include "logger.h"
+#include "configfile.h"
+#include "nodeinfo.h"
+#include "crypt.h"
+#include "comp.h"
+#include "seqnum.h"
+#include "datapackage.h"
+
+#define PACKAGEBUFSIZE 66560
+char packagebuf1[PACKAGEBUFSIZE];
+char packagebuf2[PACKAGEBUFSIZE];
+
+int unpackageDataFromNetwork(char *packet, int packetlen, char *databuf, int *databuflen) {
+	int node;
+	unsigned int ivec;
+	unsigned int decryptlen;
+	int buf1len, buf2len;
+	int r;
+	crypt_algo_def_t *cryptalgo;
+	comp_algo_def_t *compalgo;
+	struct datapacket_cryptdata *cdata;
+	unsigned char *hash;
+	// Make sure the length is above the minimum, the node exists, and the node is negotiated
+	if(packetlen < DPACK_MINPACKLEN) {
+		logmsg(LOGGER_ERR, "Too short packet");
+		return 1;
+	}
+	node = DPACK_GETSRCNODE(packet);
+	if(!NODEINFO_EXISTS(node)) {
+		logmsg(LOGGER_ERR, "Node doesn't exist");
+		return 1;
+	}
+	if(!NODEINFO_INFO(node).negotiated) {
+		logmsg(LOGGER_ERR, "Node not negotiated");
+		return 1;
+	}
+	// Get the ivec
+	ivec = (((struct datapacket *)packet)->ivec);
+	// Make sure the length of the data will fit in packagebuf1
+	if(packetlen - sizeof(struct datapacket) > PACKAGEBUFSIZE) {
+		logmsg(LOGGER_ERR, "Packet too big");
+		return 1;
+	}
+	// Decrypt data into packagebuf1
+	cryptalgo = crypt_getalgo(NODEINFO_INFO(node).cryptalgo);
+	if(!cryptalgo) {
+		logmsg(LOGGER_ERR, "Invalid encryption algorithm");
+		return 1;
+	}
+	decryptlen = PACKAGEBUFSIZE;
+	r = cryptalgo->decrypt(NODEINFO_INFO(node).cryptkey, NODEINFO_INFO(node).cryptkeybits, (unsigned char *)&ivec, sizeof(int), packet + sizeof(struct datapacket), packetlen - sizeof(struct datapacket), packagebuf1, &decryptlen);
+	if(r != CRYPT_OK) {
+		logmsg(LOGGER_ERR, "Error decrypting packet");
+		return 1;
+	}
+	buf1len = decryptlen;
+	// Cast to struct
+	if(buf1len < sizeof(struct datapacket_cryptdata)) {
+		logmsg(LOGGER_ERR, "Encrypted data too short");
+		return 1;
+	}
+	cdata = (struct datapacket_cryptdata *)packagebuf1;
+	// Make sure the packet type is OK
+	if(cdata->packettype != 0x00) {
+		logmsg(LOGGER_ERR, "Invalid packet type in the encrypted data");
+		return 1;
+	}
+	// Hash the data in the packet and check the hash
+	hash = SHA1(packagebuf1 + sizeof(struct datapacket_cryptdata), buf1len - sizeof(struct datapacket_cryptdata), NULL);
+	if(memcmp(hash, cdata->hash, (DATAPACKET_HASHSIZE > SHA_DIGEST_LENGTH) ? SHA_DIGEST_LENGTH : DATAPACKET_HASHSIZE) != 0) {
+		logmsg(LOGGER_ERR, "Hash does not match");
+		return 1;
+	}
+	// Check the sequence number
+	if(!seqnum_newseqvalid(&NODEINFO_INFO(node).seqnum, ntohl(cdata->seqnum_inc), ntohl(cdata->seqnum_time))) {
+		logmsg(LOGGER_ERR, "Invalid sequence number");
+		return 1;
+	}
+	// If compression is enabled, decompress to output.  Otherwise, copy to output.
+	if(NODEINFO_INFO(node).compalgo == COMP_NONE) {
+		if(buf1len - sizeof(struct datapacket_cryptdata) > *databuflen) {
+			logmsg(LOGGER_ERR, "Packet too big");
+			return 1;
+		}
+		memcpy(databuf, packagebuf1 + sizeof(struct datapacket_cryptdata), buf1len - sizeof(struct datapacket_cryptdata));
+		*databuflen = buf1len - sizeof(struct datapacket_cryptdata);
+	} else {
+		compalgo = comp_getalgo(NODEINFO_INFO(node).compalgo);
+		if(!compalgo) {
+			logmsg(LOGGER_ERR, "Invalid compression algorithm");
+			return 1;
+		}
+		buf2len = *databuflen;
+		r = compalgo->uncompress(databuf, &buf2len, packagebuf1 + sizeof(struct datapacket_cryptdata), buf1len - sizeof(struct datapacket_cryptdata));
+		if(r != COMP_OK) {
+			logmsg(LOGGER_ERR, "Compression error");
+			return 1;
+		}
+		*databuflen = buf2len;
+	}
+	// Return OK
+	return 0;
+}
+
+int packageDataForNetwork(char *data, int datalen, char *netbuf, int *netbuflen, int nodeid) {
+	int buf1len, buf2len;
+	comp_algo_def_t *compalgo;
+	crypt_algo_def_t *cryptalgo;
+	int r;
+	struct datapacket_cryptdata cdata;
+	unsigned char *hash;
+	unsigned int ivec;
+	struct datapacket cdatap;
+	// Make sure the node exists and is negotiated
+	if(!NODEINFO_EXISTS(nodeid)) {
+		logmsg(LOGGER_ERR, "Node %d does not exist", nodeid);
+		return 1;
+	}
+	if(!NODEINFO_INFO(nodeid).negotiated) {
+		logmsg(LOGGER_ERR, "Not yet negotiated");
+		return 1;
+	}
+	// If we're compressing data, compress it to packagebuf1.  Otherwise, just copy it.
+	if(NODEINFO_INFO(nodeid).compalgo == COMP_NONE) {
+		if(datalen > PACKAGEBUFSIZE) {
+			logmsg(LOGGER_ERR, "Packet too big");
+			return 1;
+		}
+		memcpy(packagebuf1, data, datalen);
+		buf1len = datalen;
+	} else {
+		compalgo = comp_getalgo(NODEINFO_INFO(nodeid).compalgo);
+		if(!compalgo) {
+			logmsg(LOGGER_ERR, "Invalid compression algorithm");
+			return 1;
+		}
+		if(compalgo->getcompressbuffersize(datalen) > PACKAGEBUFSIZE) {
+			logmsg(LOGGER_ERR, "Packet too big");
+			return 1;
+		}
+		buf1len = PACKAGEBUFSIZE;
+		r = compalgo->compress(packagebuf1, &buf1len, data, datalen, NODEINFO_INFO(nodeid).complevel);
+		if(r != COMP_OK) {
+			logmsg(LOGGER_ERR, "Compression error");
+			return 1;
+		}
+	}
+	// Create the header for encrypted data
+	memset(&cdata, 0, sizeof(struct datapacket_cryptdata));
+	cdata.packettype = 0x00;
+	hash = SHA1(packagebuf1, buf1len, NULL);
+	memcpy(cdata.hash, hash, (DATAPACKET_HASHSIZE > SHA_DIGEST_LENGTH) ? SHA_DIGEST_LENGTH : DATAPACKET_HASHSIZE);
+	NODEINFO_INFO(nodeid).sendseqnum++;
+	cdata.seqnum_inc = htonl(NODEINFO_INFO(nodeid).sendseqnum);
+	cdata.seqnum_time = htonl(time(NULL));
+	// Copy the header and data to packagebuf2
+	*(struct datapacket_cryptdata *)packagebuf2 = cdata;
+	if(buf1len + sizeof(struct datapacket_cryptdata) > PACKAGEBUFSIZE) {
+		logmsg(LOGGER_ERR, "Packet too big");
+		return 1;
+	}
+	memcpy(packagebuf2 + sizeof(struct datapacket_cryptdata), packagebuf1, buf1len);
+	buf2len = buf1len + sizeof(struct datapacket_cryptdata);
+	// Encrypt the data into packagebuf1
+	cryptalgo = crypt_getalgo(NODEINFO_INFO(nodeid).cryptalgo);
+	if(!cryptalgo) {
+		logmsg(LOGGER_ERR, "Invalid encryption algorithm");
+		return 1;
+	}
+	RAND_pseudo_bytes(&ivec, sizeof(ivec));
+	if(cryptalgo->getencryptbuflen(buf2len) > PACKAGEBUFSIZE) {
+		logmsg(LOGGER_ERR, "Packet too big");
+		return 1;
+	}
+	r = cryptalgo->encrypt(NODEINFO_INFO(nodeid).cryptkey, NODEINFO_INFO(nodeid).cryptkeybits, (unsigned char *)&ivec, sizeof(ivec), packagebuf2, buf2len, packagebuf1, &buf1len);
+	if(r != CRYPT_OK) {
+		logmsg(LOGGER_ERR, "Error encrypting packet");
+		return 1;
+	}
+	// Fill in the unencrypted struct headers
+	cdatap.packettype = 0x00;
+	cdatap.srcnode = htonl(global_config.id);
+	cdatap.ivec = ivec;
+	// Copy the whole packet to the output
+	if(sizeof(cdatap) + buf1len > *netbuflen) {
+		logmsg(LOGGER_ERR, "Packet too big");
+		return 1;
+	}
+	*(struct datapacket *)netbuf = cdatap;
+	memcpy(netbuf + sizeof(struct datapacket), packagebuf1, buf1len);
+	*netbuflen = sizeof(struct datapacket) + buf1len;
+	// Return OK
+	return 0;
+}
+
+

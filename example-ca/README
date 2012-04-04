@@ -1,0 +1,11 @@
+These are a few scripts to help creation of a SSL CA and certificates for ClueVPN.
+
+Before starting, edit the sections in openssl-ca.cnf and openssl-req.cnf that are marked with comments.
+
+To initialize the CA, run: ./new_ca.sh
+The CA certificate will be placed in ./ca-cert.pem
+
+To create a new certificate and key for a node, run: ./newcert.sh <NodeName>
+Respond to the questions that it asks, and make sure that the Common Name you use is the same that you use in the BNL.
+It will tell you where it placed the certificate and the key.
+

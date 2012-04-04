@@ -1,0 +1,45 @@
+# Hostname of this host - must match its cert CN
+name=testnode.cluenet.org
+# The interface name on the machine
+devname=cluevpn
+# The SSL cert for this host
+cert=/etc/cluevpn/testnode.cluenet.org-cluevpn.cert
+# The SSL key for this host
+privkey=/etc/cluevpn/testnode.cluenet.org-cluevpn.key
+# The CA certificate for the network
+cacert=/etc/cluevpn/cacert.pem
+# The ID for this host - must match the ID in the BNL for this host.  This directive is optional - if not given, the ID is discovered from the BNL.
+id=5
+# The port to listen on - must match the port for this host in the BNL.  Default is 3406
+port=3406
+# Whether or not to disable IPv6
+disableipv6=false
+# Whether or not to locally prefer IPv6 for external communication
+preferipv6=false
+# If you'd like to make sure that each cert has a certain OU, specify it here
+restrictouname=ClueVPN
+# The DSA public key for the network
+bnlpubkey=dsa_pub.pem
+# The DSA private key for the network - only one host should have this - the host signing the BNL
+bnlprivkey=dsa_priv.pem
+# The debug level as specified on the command line - the command line overrides this
+loglevel=3
+# The log method (stderr, file, or syslog)
+logmethod=syslog
+# If the log method is file, the log file
+# logfile=/var/log/cluevpn.log
+# The command to execute after cluevpn finishes initializing
+upcmd=ifconfig $TUNDEV 10.156.10.1 netmask 255.255.0.0 up
+# The command to run for each subnet the VPN can reach
+# subnetupcmd=/etc/cluevpn/initsubnet.sh
+# The command to run for each locally assigned subnet the VPN can reach
+# mysubnetupcmd=/etc/cluevpn/initmysubnet.sh
+# A space-separated list of encryption algorithms, key lengths, and preference values.
+# Currently, only the aescbc algorithm is supported.
+# In the space-separated list of supported algorithms, each item has three fields separated by colons.
+# The first field is the algorithm (there can only be one of each algorithm), the second is the key length in bits to use for the algorithm, and the third is the preference value
+# The preference value is used in negotiation to help choose which algorithm to use.  The algorithm with the highest total preference value from both sides is used
+cryptalgos=aescbc:128:20
+# A space separated list of compression algorithms.  The two supported algorithms currently are "zlib" and "none"
+# It's in the same format as the cryptalgos directive, but instead of the key length, it's the compression level (1-9)
+compalgos=none:0:5 zlib:6:2
