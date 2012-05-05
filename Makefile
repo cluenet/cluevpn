@@ -17,20 +17,27 @@ clean:
 install: all
 	install -d $(DESTDIR)/usr/bin
 	install -m0755 bnlutil $(DESTDIR)/usr/bin/
-	install -m0755 cluevpn $(DESTDIR)/usr/bin/
 	install -m0755 csv2bnl $(DESTDIR)/usr/bin/
+	install -d $(DESTDIR)/usr/sbin
+	install -m0755 cluevpn $(DESTDIR)/usr/sbin/
 	install -d $(DESTDIR)/etc/cluevpn
 	install -m0644 cluevpn.conf-example $(DESTDIR)/etc/cluevpn/
 	install -m0644 vpn-up-example.sh $(DESTDIR)/etc/cluevpn/
 	install -m0644 my-subnet-up-example.sh $(DESTDIR)/etc/cluevpn
+	install -d $(DESTDIR)/usr/lib/systemd/system
+	install -m0644 initscripts/cluevpn.service $(DESTDIR)/usr/lib/systemd/system/
+
+install-debian:
+	install -m0755 initscripts/debian.sh $(DESTDIR)/etc/init.d/cluevpn
+
+postinstall-debian:
+	update-rc.d cluevpn defaults
 
 uninstall:
-	rm -rf /usr/local/bin/csv2bnl /usr/local/bin/bnlutil /usr/local/sbin/cluevpn
-	rm -rf /etc/init.d/cluevpn /etc/rc2.d/S55cluevpn
-
-debinstall: install
-	install -m0755 initscripts/debian.sh /etc/init.d/cluevpn
-	update-rc.d -f cluevpn defaults
+	rm -f $(DESTDIR)/usr/bin/csv2bnl
+	rm -f $(DESTDIR)/usr/bin/bnlutil
+	rm -f $(DESTDIR)/usr/sbin/cluevpn
+	rm -f $(DESTDIR)/etc/init.d/cluevpn
 
 bnlutil: bnlutil.o configfile.o signature.o logger.o bnl.o nodeinfo.o connections.o routetable.o seqnum.o tunio.o
 cluevpn: cluevpn.o comp.o comp_zlib.o configfile.o connections.o crypt_aescbc.o crypt.o dsv.o logger.o routetable.o seqnum.o signature.o tunio.o bnl.o nodeinfo.o netpackets.o tcpcons.o datapackage.o
