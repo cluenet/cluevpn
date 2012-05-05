@@ -1,0 +1,9 @@
+[Unit]
+Description=ClueVPN
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/cluevpn -c /etc/cluevpn -f
+
+[Install]
+WantedBy=multi-user.target
